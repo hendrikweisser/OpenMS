@@ -124,8 +124,7 @@ protected:
 
     registerSubsection_("Mascot_server", "Mascot server details");
     registerSubsection_("Mascot_parameters", "Mascot parameters used for searching");
-    registerFlag_("keep_protein_links", "The Mascot response file usually returns incomplete/wrong protein hits, so re-indexing the peptide hits is required. To avoid confusion why there"
-                                        " are so few protein hits and force re-indexing, no proteins should be reported. To see the original (wrong) list, enable this flag.", true);
+    registerFlag_("keep_protein_links", "The Mascot response file usually returns incomplete/wrong protein associations, so re-indexing the peptide hits is required. To avoid confusion about why there are so few protein hits and to force re-indexing, by default no protein associations are reported. To see the original (wrong) list, enable this option.", true);
   }
 
   Param getSubsectionDefaults_(const String & section) const
@@ -147,7 +146,7 @@ protected:
     return Param();
   }
 
-  ExitCodes main_(int argc, const char ** argv)
+  ExitCodes main_(int argc, const char** argv)
   {
     //-------------------------------------------------------------
     // parameter handling
@@ -189,15 +188,14 @@ protected:
     // Usage of a QCoreApplication is overkill here (and ugly too), but we just use the
     // QEventLoop to process the signals and slots and grab the results afterwards from
     // the MascotRemotQuery instance
-    char ** argv2 = const_cast<char **>(argv);
+    char** argv2 = const_cast<char**>(argv);
     QCoreApplication event_loop(argc, argv2);
-    MascotRemoteQuery * mascot_query = new MascotRemoteQuery(&event_loop);
+    MascotRemoteQuery* mascot_query = new MascotRemoteQuery(&event_loop);
     Param mascot_query_param = getParam_().copy("Mascot_server:", true);
     writeDebug_("Setting parameters for Mascot query", 1);
     mascot_query->setParameters(mascot_query_param);
     writeDebug_("Setting spectra for Mascot query", 1);
     mascot_query->setQuerySpectra(ss.str());
-
     // remove unnecessary spectra
     ss.clear();
 
@@ -279,7 +277,7 @@ protected:
 };
 
 
-int main(int argc, const char ** argv)
+int main(int argc, const char** argv)
 {
   TOPPMascotAdapterOnline tool;
 
