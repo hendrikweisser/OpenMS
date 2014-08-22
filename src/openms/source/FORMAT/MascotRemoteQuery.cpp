@@ -90,7 +90,7 @@ namespace OpenMS
     if (http_->state() != QHttp::Unconnected)
     {
 #ifdef MASCOTREMOTEQUERY_DEBUG
-      std::cerr << "Aborting open connection!\n";
+      cerr << "Aborting open connection!\n";
 #endif
       http_->abort(); // hardcore close connection (otherwise server might have too many dangling requests)
     }
@@ -99,7 +99,7 @@ namespace OpenMS
 
   void MascotRemoteQuery::timedOut()
   {
-    LOG_FATAL_ERROR << "Mascot request timed out after " << to_ << " seconds! See 'timeout' parameter for details!" << std::endl;
+    LOG_FATAL_ERROR << "Mascot request timed out after " << to_ << " seconds! See 'timeout' parameter for details!" << endl;
     http_->abort(); // one might try to resend the job here instead...
   }
 
@@ -289,17 +289,7 @@ namespace OpenMS
     }
     header.setValue("Accept", "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,*/*");
 
-    QByteArray querybytes;
-    querybytes.append("--" + boundary + "--\n");
-    querybytes.append("Content-Disposition: ");
-    querybytes.append("form-data; name=\"QUE\"\n");
-    querybytes.append("\n");
-    querybytes.append(query_spectra_.c_str());
-    querybytes.append("--" + boundary + "--\n");
-
-    querybytes.replace("\n", "\r\n");
-
-    header.setContentLength(querybytes.length());
+    header.setContentLength(querybytes_.length());
 
 #ifdef MASCOTREMOTEQUERY_DEBUG
     logHeader_(header, "request");
@@ -310,7 +300,7 @@ namespace OpenMS
 
     if (to_ > 0)
       timeout_.start();
-    http_->request(header, querybytes);
+    http_->request(header, querybytes_);
   }
 
   void MascotRemoteQuery::httpRequestFinished(int requestId, bool error)
@@ -411,7 +401,7 @@ namespace OpenMS
 
   void MascotRemoteQuery::readyReadSlot(const QHttpResponseHeader& /* resp */)
   {
-    //if (http_->bytesAvailable() < 1000) std::cerr << "new bytes: " << http_->bytesAvailable() << " from " << resp.toString() << " with code " <<  resp.statusCode() << " and httpstat: " << http_->state() << "\n";
+    //if (http_->bytesAvailable() < 1000) cerr << "new bytes: " << http_->bytesAvailable() << " from " << resp.toString() << " with code " <<  resp.statusCode() << " and httpstat: " << http_->state() << "\n";
     if (to_ > 0)
       timeout_.start(); // reset timeout
   }
@@ -513,7 +503,7 @@ namespace OpenMS
     if (new_bytes.contains("Logged in successfu")) // Do not use the whole string. Currently Mascot writes 'successfuly', but that might change...
     {
       //Successful login? fire off the search
-      LOG_INFO << "Login successful!" << std::endl;
+      LOG_INFO << "Login successful!" << endl;
       execQuery();
     }
     else if (new_bytes.contains("Error: You have entered an invalid password"))
@@ -585,16 +575,16 @@ namespace OpenMS
       QRegExp mascot_error_regex("\\[M[0-9][0-9][0-9][0-9][0-9]\\]");
       if (response_text.contains(mascot_error_regex))
       {
-        LOG_ERROR << "Received response with Mascot error message!" << std::endl;
+        LOG_ERROR << "Received response with Mascot error message!" << endl;
         if (mascot_error_regex.cap() == "[M00380]")
         {
           // we know this error, so we give a much shorter and readable error message for the user
-          LOG_ERROR << "You must enter an email address and user name when using the Matrix Science public web site [M00380]." << std::endl;
+          LOG_ERROR << "You must enter an email address and user name when using the Matrix Science public web site [M00380]." << endl;
           error_message_ = "You must enter an email address and user name when using the Matrix Science public web site [M00380].";
         }
         else
         {
-          LOG_ERROR << "Error code: " << mascot_error_regex.cap().toStdString() << std::endl;
+          LOG_ERROR << "Error code: " << mascot_error_regex.cap().toStdString() << endl;
           QTextDocument doc;
           doc.setHtml(response_text);
           error_message_ = doc.toPlainText().toStdString();
@@ -615,7 +605,26 @@ namespace OpenMS
 
   void MascotRemoteQuery::setQuerySpectra(const String& exp)
   {
-    query_spectra_ = exp;
+    // Qt's QHttpHeader class uses "int" in its "setContentLength" method;
+    // this limits the amount of data that can be sent in a query.
+    // Add header/footer here, so we can check the size:
+    QString boundary = boundary_.c_str();
+    boundary = "--" + boundary + "--\n";
+    querybytes_.clear();
+    querybytes_.append(boundary);
+    querybytes_.append("Content-Disposition: form-data; name=\"QUE\"\n\n");
+    querybytes_.append(exp.c_str());
+    querybytes_.append(boundary);
+    querybytes_.replace("\n", "\r\n");
+
+    // "querybytes_.size()" returns an "int" -> same size limit as HTTP query:
+    if (long(querybytes_.size()) < long(exp.size())) // overflow
+    {
+      int diff = querybytes_.size() - int(exp.size());
+      Size actual_size = exp.size() + diff;
+      LOG_ERROR << "Error: Too much spectral data. The query sent to Mascot cannot exceed " << numeric_limits<int>::max() << " bytes; current size: " << actual_size << " bytes. Split your input file into smaller parts using FileFilter." << endl;
+      throw Exception::BufferOverflow(__FILE__, __LINE__, __PRETTY_FUNCTION__);
+    }
   }
 
   const QByteArray& MascotRemoteQuery::getMascotXMLResponse() const
@@ -690,7 +699,7 @@ namespace OpenMS
 
     if (!url.startsWith(host_name_.toQString()))
     {
-      LOG_ERROR << "Invalid location returned by mascot! Abort." << std::endl;
+      LOG_ERROR << "Invalid location returned by mascot! Abort." << endl;
       endRun_();
       return;
     }

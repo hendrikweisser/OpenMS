@@ -157,7 +157,7 @@ private:
     */
     void removeHostName_(QString& url);
 
-    String query_spectra_;
+    QByteArray querybytes_;
     QByteArray mascot_xml_;
     QHttp* http_;
     QString cookie_;
