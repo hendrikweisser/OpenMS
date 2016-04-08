@@ -18,6 +18,7 @@ IDExtractor
 IDMassAccuracy
 IDScoreSwitcher
 IDSplitter
+IdXMLSplitter
 LabeledEval
 LowMemPeakPickerHiRes
 LowMemPeakPickerHiRes_RandomAccess
