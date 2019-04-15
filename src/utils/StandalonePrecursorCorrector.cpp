@@ -37,6 +37,7 @@
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
 #include <OpenMS/FORMAT/IdXMLFile.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/MATH/STATISTICS/StatisticFunctions.h>
 
 using namespace OpenMS;
 using namespace std;
@@ -94,13 +95,117 @@ protected:
     registerIntOption_("max_charge", "<num>", 5, "Maximum charge to consider (if 'assign_charge' is 0 or 1)", false);
     setMinInt_("max_charge", 1);
 
-    registerIntOption_("n_isotopes", "<num>", 6, "Number of isotopologue peaks to consider", false);
+    registerIntOption_("n_isotopes", "<num>", 5, "Number of isotopologue peaks to consider", false);
     setMinInt_("n_isotopes", 2);
 
     registerDoubleOption_("mz_tolerance", "<tolerance>", 10.0, "m/z tolerance when matching peaks", false);
     setMinFloat_("mz_tolerance", 0.0);
     registerStringOption_("mz_tolerance_unit", "<unit>", "ppm", "Unit of precursor mass tolerance", false);
     setValidStrings_("mz_tolerance_unit", ListUtils::create<String>("Da,ppm"));
+  }
+
+
+  vector<double> score_(const MSSpectrum& real_spec,
+                        const MSSpectrum& template_spec, Int charge,
+                        double prec_mz, double mz_tol, bool tol_unit_ppm,
+                        PeptideIdentification* qc_id_ptr)
+  {
+    Size n_isotopes = template_spec.size();
+    vector<double> result(n_isotopes, -1.0);
+    if (tol_unit_ppm)
+    {
+      mz_tol = prec_mz * mz_tol * 1e-6;
+    }
+    // extract all relevant peak intensities from real spectrum:
+    vector<double> intensities;
+    vector<double> peak_mz; // for QC annotations
+    intensities.reserve(n_isotopes * 2 - 1);
+    peak_mz.reserve(n_isotopes * 2 - 1);
+    // shift template spectrum to the left (precursor peak is at the right):
+    double shift = template_spec.back().getMZ() - prec_mz;
+    for (Size i = 0; i < n_isotopes - 1; ++i)
+    {
+      Int index = real_spec.findNearest(template_spec[i].getMZ() - shift,
+                                        mz_tol);
+      if (index >= 0)
+      {
+        intensities.push_back(real_spec[index].getIntensity());
+        peak_mz.push_back(real_spec[index].getMZ());
+      }
+      else
+      {
+        intensities.push_back(0.0);
+        peak_mz.push_back(0.0);
+      }
+    }
+    // shift template spectrum such that precursor peak is at the left:
+    shift = template_spec[0].getMZ() - prec_mz;
+    for (Size i = 0; i < n_isotopes; ++i)
+    {
+      Int index = real_spec.findNearest(template_spec[i].getMZ() - shift,
+                                        mz_tol);
+      if (index >= 0)
+      {
+        intensities.push_back(real_spec[index].getIntensity());
+        peak_mz.push_back(real_spec[index].getMZ());
+      }
+      else
+      {
+        intensities.push_back(0.0);
+        peak_mz.push_back(0.0);
+      }
+    }
+    Size peak_count = count_if(intensities.begin(), intensities.end(),
+                               [](double x){return x > 0.0;});
+    if (peak_count <= 1) // not enough peaks to do anything useful
+    {
+      return result;
+    }
+    vector<double> template_intensities;
+    template_intensities.reserve(n_isotopes);
+    for (const auto& peak : template_spec)
+    {
+      template_intensities.push_back(peak.getIntensity());
+    }
+
+    Size start_pos = n_isotopes - 1; // monoisotopic pos. in "intensities"
+    for (Int offset = 0; offset < n_isotopes; ++offset)
+    {
+      auto start_it = intensities.begin() + start_pos;
+      double cor = Math::pearsonCorrelationCoefficient(
+        template_intensities.begin(), template_intensities.end(), start_it,
+        start_it + n_isotopes);
+      if (cor != cor) cor = -1.0; // NaN
+      result[offset] = cor;
+      if (qc_id_ptr) // @TODO: check for "valid" correlation?
+      {
+        vector<PeptideHit::PeakAnnotation> annotations;
+        for (Size i = 0; i < n_isotopes; ++i)
+        {
+          double mz = peak_mz[start_pos + i];
+          if (mz == 0.0) continue; // no matching peak
+          PeptideHit::PeakAnnotation ann;
+          ann.annotation = "i" + String(i);
+          ann.charge = charge;
+          ann.mz = mz;
+          ann.intensity = intensities[start_pos + i];
+          annotations.push_back(ann);
+        }
+        if (!annotations.empty())
+        {
+          PeptideHit hit;
+          hit.setCharge(charge);
+          hit.setMetaValue("label", "z=" + String(charge) + "/i=" +
+                           String(offset));
+          hit.setScore(cor);
+          hit.setPeakAnnotations(annotations);
+          qc_id_ptr->insertHit(hit);
+        }
+      }
+      --start_pos;
+    }
+
+    return result;
   }
 
   
@@ -196,8 +301,8 @@ protected:
         qc_spectra.addSpectrum(qc_spec);
       }
       
-      vector<pair<Size, double>> best_scores;
-      best_scores.reserve(charge_candidates.size());
+      vector<pair<Size, double>> best_results; // best offset/score per charge
+      best_results.reserve(charge_candidates.size());
       for (Int charge : charge_candidates)
       {
         double mass = prec_mz * charge;
@@ -208,6 +313,7 @@ protected:
           peak.setMZ(peak.getMZ() / charge);
           template_spec.push_back(peak);
         }
+        PeptideIdentification* qc_id_ptr = nullptr;
         if (!qc_id_out.empty()) // add QC annotations
         {
           template_spec.getIntegerDataArrays().resize(1);
@@ -218,68 +324,46 @@ protected:
           {
             template_spec.getStringDataArrays()[0].push_back("i" + String(i));
           }
-        }
-        vector<PeptideHit::PeakAnnotation> annotations;
-        Size best_offset = 0;
-        double best_score = 0.0;
-        if (!qc_id_out.empty())
-        {
           PeptideIdentification qc_id;
           qc_id.setIdentifier("id");
           qc_id.setRT(data[index_pair.first].getRT());
           qc_id.setMZ(prec_mz);
-          qc_id.setScoreType("hyperscore");
+          qc_id.setScoreType("correlation");
           qc_ids.push_back(qc_id);
+          qc_id_ptr = &qc_ids.back();
         }
-        for (Size offset = 0; offset < n_isotopes; ++offset)
+        vector<double> cors = score_(real_spec, template_spec, charge, prec_mz,
+                                     mz_tol, tol_unit_ppm, qc_id_ptr);
+        best_results.push_back(make_pair(0, cors[0]));
+        for (Size offset = 1; offset < cors.size(); ++offset)
         {
-          // move template spectrum such that precursor m/z coincides with an
-          // isotopologue peak (given by offset):
-          double diff = template_spec[offset].getMZ() - prec_mz;
-          for (auto& peak : template_spec)
+          if (cors[offset] > best_results.back().second)
           {
-            peak.setMZ(peak.getMZ() - diff);
+            best_results.back().first = offset;
+            best_results.back().second = cors[offset];
           }
-
-          // @TODO: implement a better scoring function that includes m/z
-          // deviations and correlation with averagine intensities
-          double score = MetaboliteSpectralMatching::computeHyperScore(
-            mz_tol, tol_unit_ppm, real_spec, template_spec, annotations);
-          if (!qc_id_out.empty() && (score > 0))
-          {
-            PeptideIdentification& qc_id = qc_ids.back();
-            PeptideHit hit;
-            hit.setCharge(charge);
-            hit.setMetaValue("label", "z=" + String(charge) + "/i=" +
-                             String(offset));
-            hit.setScore(score);
-            hit.setPeakAnnotations(annotations);
-            qc_id.insertHit(hit);
-          }
-          annotations.clear();
-          if (score > best_score)
-          {
-            best_score = score;
-            best_offset = offset;
-          }          
         }
-        best_scores.push_back(make_pair(best_offset, best_score));
+        if (best_results.back().first != 0)
+        {
+          LOG_DEBUG << "Correlations: " << ListUtils::concatenate(cors, ", ")
+                    << endl;
+        }
       }
       // find overall best match:
       Int best_charge = charge_candidates[0];
-      Size best_offset = best_scores[0].first;
-      double best_score = best_scores[0].second;
+      Size best_offset = best_results[0].first;
+      double best_score = best_results[0].second;
       for (Size i = 1; i < charge_candidates.size(); ++i)
       {
-        if (best_scores[i].second > best_score)
+        if (best_results[i].second > best_score)
         {
           best_charge = charge_candidates[i];
-          best_offset = best_scores[i].first;
-          best_score = best_scores[i].second;
+          best_offset = best_results[i].first;
+          best_score = best_results[i].second;
         }
       }
-      if ((best_score > 0) && ((best_charge != prec_charge) ||
-                               (best_offset != 0)))
+      if ((best_score > -1.0) && ((best_charge != prec_charge) ||
+                                  (best_offset != 0)))
       {
         ++counter;
         LOG_INFO << "Spectrum " << index_pair.first << " (RT: "
