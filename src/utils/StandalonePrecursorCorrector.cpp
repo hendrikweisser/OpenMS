@@ -71,6 +71,7 @@ public:
   }
 
 protected:
+  stringstream debug_stream_;
 
   void registerOptionsAndFlags_() override
   {
@@ -92,7 +93,7 @@ protected:
     setMaxInt_("assign_charge", 1);
     registerIntOption_("min_charge", "<num>", 2, "Minimum charge to consider (if 'assign_charge' is 0 or 1)", false);
     setMinInt_("min_charge", 1);
-    registerIntOption_("max_charge", "<num>", 5, "Maximum charge to consider (if 'assign_charge' is 0 or 1)", false);
+    registerIntOption_("max_charge", "<num>", 6, "Maximum charge to consider (if 'assign_charge' is 0 or 1)", false);
     setMinInt_("max_charge", 1);
 
     registerIntOption_("n_isotopes", "<num>", 5, "Number of isotopologue peaks to consider", false);
@@ -167,6 +168,10 @@ protected:
     {
       template_intensities.push_back(peak.getIntensity());
     }
+    debug_stream_ << "Charge " << charge <<  ":\nReal intensities: "
+                  << ListUtils::concatenate(intensities, ", ")
+                  << "\nIso. intensities: "
+                  << ListUtils::concatenate(template_intensities, ", ") << endl;
 
     Size start_pos = n_isotopes - 1; // monoisotopic pos. in "intensities"
     for (Int offset = 0; offset < n_isotopes; ++offset)
@@ -204,6 +209,8 @@ protected:
       }
       --start_pos;
     }
+    debug_stream_ << "Correlations: " << ListUtils::concatenate(result, ", ")
+                  << endl;
 
     return result;
   }
@@ -267,6 +274,7 @@ protected:
                                  "Correcting precursor information...");
     for (auto index_pair : precursor_indexes)
     {
+      debug_stream_.str(""); // clear content
       // @TODO: what if there's more than one precursor?
       const Precursor& prec = data[index_pair.first].getPrecursors()[0];
       double prec_mz = prec.getMZ(); // @TODO: check where the peak actually is?
@@ -343,11 +351,6 @@ protected:
             best_results.back().second = cors[offset];
           }
         }
-        if (best_results.back().first != 0)
-        {
-          LOG_DEBUG << "Correlations: " << ListUtils::concatenate(cors, ", ")
-                    << endl;
-        }
       }
       // find overall best match:
       Int best_charge = charge_candidates[0];
@@ -370,6 +373,7 @@ protected:
                  << data[index_pair.first].getRT() << "): assigned charge "
                  << prec_charge << ", estimated charge " << best_charge
                  << " (isotopologue offset " << best_offset << ")" << endl;
+        LOG_DEBUG << debug_stream_.str() << endl;
       }
       progresslogger.nextProgress();
     }
